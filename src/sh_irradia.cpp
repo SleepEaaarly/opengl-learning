@@ -1,6 +1,6 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-#include <stb_image.h>
+#include "stb_image.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -11,6 +11,9 @@
 #include "model.h"
 
 #include <iostream>
+#include <random>
+#include <memory>
+#include "rgbe.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -20,6 +23,8 @@ unsigned int loadTexture(const char *path);
 void renderSphere();
 void renderCube();
 void renderQuad();
+void computeRadianceSHCoff(float *data, float* radiance_sh_coff, const int width, const int height, const int nrComponent);
+void calcSHofDir(const glm::vec3& dir, float* rst);
 
 // settings
 const unsigned int SCR_WIDTH = 1280;
@@ -34,6 +39,10 @@ bool firstMouse = true;
 // timing
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
+
+// PI
+const float pi = 3.1415927f;
+const int sh_degree = 3;
 
 int main()
 {
@@ -84,7 +93,7 @@ int main()
 
     // build and compile shaders
     // -------------------------
-    Shader pbrShader("shaders/2.2.2.pbr.vs", "shaders/2.2.2.pbr.fs");
+    Shader pbrShader("shaders/2.2.2.pbr.vs", "shaders/2.2.2.sh_pbr.fs");
     Shader equirectangularToCubemapShader("shaders/2.2.2.cubemap.vs", "shaders/2.2.2.equirectangular_to_cubemap.fs");
     Shader irradianceShader("shaders/2.2.2.cubemap.vs", "shaders/2.2.2.irradiance_convolution.fs");
     Shader prefilterShader("shaders/2.2.2.cubemap.vs", "shaders/2.2.2.prefilter.fs");
@@ -144,6 +153,18 @@ int main()
     stbi_set_flip_vertically_on_load(true);
     int width, height, nrComponents;
     float *data = stbi_loadf("pic/newport_loft.hdr", &width, &height, &nrComponents, 0);
+    // float *data = loadHDRFile("pic/newport_loft.hdr", &width, &height);
+    std::cout << width << ", " << height << ", " << nrComponents << std::endl;
+    std::cout << sizeof(data) / sizeof(float) << std::endl;
+    std::cout << data[width*height*nrComponents-1] << std::endl;
+
+    float* radiance_sh_coff = new float[3*sh_degree*sh_degree]();
+    computeRadianceSHCoff(data, radiance_sh_coff, width, height, nrComponents);
+    
+    for (int i = 0; i < 3*sh_degree*sh_degree; ++i) {
+        std::cout << radiance_sh_coff[i] << ", ";
+    }
+
     unsigned int hdrTexture;
     if (data)
     {
@@ -336,6 +357,11 @@ int main()
     glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
     pbrShader.use();
     pbrShader.setMat4("projection", projection);
+    for (size_t i = 0; i < 9; ++i) {
+        pbrShader.setVec3("radiance_sh_coff[" + std::to_string(i) + "]",
+            radiance_sh_coff[3*i], radiance_sh_coff[3*i+1], radiance_sh_coff[3*i+2]);
+    }
+    
     backgroundShader.use();
     backgroundShader.setMat4("projection", projection);
 
@@ -507,7 +533,8 @@ int main()
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
-
+    
+    delete[] radiance_sh_coff;
     // glfw: terminate, clearing all previously allocated GLFW resources.
     // ------------------------------------------------------------------
     glfwTerminate();
@@ -799,4 +826,83 @@ unsigned int loadTexture(char const * path)
     }
 
     return textureID;
+}
+
+void computeRadianceSHCoff(float *data, float* radiance_sh_coff, const int width, const int height, const int nrComponents) {
+    float sh_base_coff[9];
+    for (float r1 = 0.f; r1 < 1.f; r1 += 0.01f) {
+        for (float r2 = 1.f; r2 > 0.f; r2 -= 0.01f) {
+        // for (float r2 = 0.f; r2 < 1.f; r2 += 0.01f) {
+            auto phi = 2*pi*r1;
+            auto theta = -(r2 - 0.5f) * pi;
+            // auto cos_theta = std::sqrt(r2*(1-r2));
+            auto cos_theta = std::cos(theta);
+            // auto sin_theta = 1-2*r2;
+            auto sin_theta = std::sin(theta);
+            auto x = 2*cos_theta*std::sin(phi);
+            auto y = sin_theta;
+            auto z = 2*cos_theta*std::cos(phi);
+            glm::vec3 dir(x,y,z);
+            int u = r1*width;
+            int v = (std::asin(y) / pi + 0.5f)*height;
+            for (int i = 0; i < 3; ++i) {
+                auto ind = (v*width+u)*nrComponents+i;
+                ind = clamp(ind, 0, 3840000-1);
+                // std::cout << ind << std::endl;
+                auto c = data[ind];
+                calcSHofDir(dir, sh_base_coff);
+                for (int j = 0; j < 9; ++j) {
+                    // radiance_sh_coff[j*3+i] += c*sh_base_coff[j] * (4 * pi) / 10000.f;
+                    radiance_sh_coff[j*3+i] += c*sh_base_coff[j] * std::sin(theta)*2*pi*pi / 10000.f;
+                }
+            }
+        }
+    }
+}
+
+void calcSHofDir(const glm::vec3& dir, float* rst) {
+    // ONLY 3 degree implement!
+    // Attention: 具体公式和直角坐标系与球面坐标系的建模方式相关, 这里建模时原本x对应z，原本y对应x，原本z对应y。
+    static const float cof0 = 0.282095f;
+    static const float cof1 = 0.488603f;
+    static const float cof2[3] = {1.092548f, 0.315392f, 0.546274f};
+
+    float x = dir.x, y = dir.y, z = dir.z;
+    float xx = x*x, xy = x*y, xz = x*z, yy = y*y, yz = y*z, zz = z*z;
+
+    rst[0] = cof0;
+    rst[1] = cof1 * x; // y; (原本)
+    rst[2] = cof1 * y; // z;
+    rst[3] = cof1 * z; // x;
+    rst[4] = cof2[0] * xz; // xy;
+    rst[5] = cof2[0] * xy; // yz;
+    rst[6] = cof2[1] * (-zz-xx+2*yy); // (-xx-yy+2*zz);
+    rst[7] = cof2[0] * yz; // xz;
+    rst[8] = cof2[2] * (zz-xx); // (xx-yy);
+}
+
+glm::vec3 calcSHIrradiance(const glm::vec3& normal, float* radiance_sh_coff) {
+    static const float A0 = pi;
+    static const float A1 = 2 * pi / 3;
+    static const float A2 = pi / 4;
+
+    static const float cof0 = 0.282095;
+    static const float cof1 = 0.488603;
+    static const float cof2[3] = {1.092548, 0.315392, 0.546274};
+
+    float x = normal.x, y = normal.y, z = normal.z;
+    float xx = x*x, xy = x*y, xz = x*z, yy = y*y, yz = y*z, zz = z*z;
+    glm::vec3 rst = glm::vec3(0.f);
+
+    rst += A0 * radiance_sh_coff[0] * cof0;
+    rst += A1 * radiance_sh_coff[1] * cof1 * x; // y; (原本)
+    rst += A1 * radiance_sh_coff[2] * cof1 * y; // z;
+    rst += A1 * radiance_sh_coff[3] * cof1 * z; // x;
+    rst += A2 * radiance_sh_coff[4] * cof2[0] * xz; // xy;
+    rst += A2 * radiance_sh_coff[5] * cof2[0] * xy; // yz;
+    rst += A2 * radiance_sh_coff[6] * cof2[1] * (-zz-xx+2*yy); // (-xx-yy+2*zz);
+    rst += A2 * radiance_sh_coff[7] * cof2[0] * yz; // xz;
+    rst += A2 * radiance_sh_coff[8] * cof2[2] * (zz-xx); // (xx-yy);
+    
+    return rst;
 }

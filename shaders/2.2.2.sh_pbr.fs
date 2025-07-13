@@ -22,7 +22,17 @@ uniform vec3 lightColors[4];
 
 uniform vec3 camPos;
 
+uniform vec3 radiance_sh_coff[9];
+
 const float PI = 3.14159265359;
+const float A0 = PI;
+const float A1 = 2 * PI / 3;
+const float A2 = PI / 4;
+
+const float cof0 = 0.282095;
+const float cof1 = 0.488603;
+const float cof2[3] = float[3](1.092548, 0.315392, 0.546274);
+
 // ----------------------------------------------------------------------------
 // Easy trick to get tangent-normals to world-space to keep PBR code simplified.
 // Don't worry if you don't get what's going on; you generally want to do normal 
@@ -90,16 +100,36 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness)
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }   
 // ----------------------------------------------------------------------------
+
+vec3 calcSHIrradiance(vec3 normal) {
+    float x = normal.x, y = normal.y, z = normal.z;
+    float xx = x*x, xy = x*y, xz = x*z, yy = y*y, yz = y*z, zz = z*z;
+    vec3 rst = vec3(0);
+
+    rst += A0 * radiance_sh_coff[0] * cof0;
+    rst += A1 * radiance_sh_coff[1] * cof1 * x; // y; (原本)
+    rst += A1 * radiance_sh_coff[2] * cof1 * y; // z;
+    rst += A1 * radiance_sh_coff[3] * cof1 * z; // x;
+    rst += A2 * radiance_sh_coff[4] * cof2[0] * xz; // xy;
+    rst += A2 * radiance_sh_coff[5] * cof2[0] * xy; // yz;
+    rst += A2 * radiance_sh_coff[6] * cof2[1] * (-zz-xx+2*yy); // (-xx-yy+2*zz);
+    rst += A2 * radiance_sh_coff[7] * cof2[0] * yz; // xz;
+    rst += A2 * radiance_sh_coff[8] * cof2[2] * (zz-xx); // (xx-yy);
+    
+    return rst;
+}
+
+
 void main()
 {		
     // material properties
-    // vec3 albedo_color = vec3(0.9, 0.9, 0.9);
-    vec3 albedo = pow(texture(albedoMap, TexCoords).rgb, vec3(2.2));
-    // vec3 albedo = pow(albedo_color, vec3(2.2));
-    float metallic = texture(metallicMap, TexCoords).r;
-    float roughness = texture(roughnessMap, TexCoords).r;
-    // float metallic = 0.9;
-    // float roughness = 0.01;
+    vec3 albedo_color = vec3(0.9, 0.9, 0.9);
+    // vec3 albedo = pow(texture(albedoMap, TexCoords).rgb, vec3(2.2));
+    vec3 albedo = pow(albedo_color, vec3(2.2));
+    // float metallic = texture(metallicMap, TexCoords).r;
+    // float roughness = texture(roughnessMap, TexCoords).r;
+    float metallic = 0.3;
+    float roughness = 0.5;
     float ao = texture(aoMap, TexCoords).r;
        
     // input lighting data
@@ -142,7 +172,7 @@ void main()
         // have diffuse lighting, or a linear blend if partly metal (pure metals
         // have no diffuse light).
         kD *= 1.0 - metallic;	                
-            
+        
         // scale light by NdotL
         float NdotL = max(dot(N, L), 0.0);        
 
@@ -157,14 +187,16 @@ void main()
     vec3 kD = 1.0 - kS;
     kD *= 1.0 - metallic;	  
     
-    vec3 irradiance = texture(irradianceMap, N).rgb;
+    // vec3 irradiance = texture(irradianceMap, N).rgb;
+    vec3 irradiance = calcSHIrradiance(N);
     vec3 diffuse      = irradiance * albedo;
     
     // sample both the pre-filter map and the BRDF lut and combine them together as per the Split-Sum approximation to get the IBL specular part.
     const float MAX_REFLECTION_LOD = 4.0;
     vec3 prefilteredColor = textureLod(prefilterMap, R,  roughness * MAX_REFLECTION_LOD).rgb;    
     vec2 brdf  = texture(brdfLUT, vec2(max(dot(N, V), 0.0), roughness)).rg;
-    vec3 specular = prefilteredColor * (F * brdf.x + brdf.y);
+    // vec3 specular = prefilteredColor * (F * brdf.x + brdf.y);
+    vec3 specular = vec3(0.f);
 
     vec3 ambient = (kD * diffuse + specular) * ao;
     
@@ -175,5 +207,6 @@ void main()
     // gamma correct
     color = pow(color, vec3(1.0/2.2)); 
 
-    FragColor = vec4(color , 1.0);
+    // FragColor = vec4(color , 1.0);
+    FragColor = vec4(irradiance, 1.0);
 }
