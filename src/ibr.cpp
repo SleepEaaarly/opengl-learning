@@ -479,12 +479,12 @@ int main()
             pbrShader.setVec3("lightPositions[" + std::to_string(i) + "]", newPos);
             pbrShader.setVec3("lightColors[" + std::to_string(i) + "]", lightColors[i]);
 
-            model = glm::mat4(1.0f);
-            model = glm::translate(model, newPos);
-            model = glm::scale(model, glm::vec3(0.5f));
-            pbrShader.setMat4("model", model);
-            pbrShader.setMat3("normalMatrix", glm::transpose(glm::inverse(glm::mat3(model))));
-            renderSphere();
+            // model = glm::mat4(1.0f);
+            // model = glm::translate(model, newPos);
+            // model = glm::scale(model, glm::vec3(0.5f));
+            // pbrShader.setMat4("model", model);
+            // pbrShader.setMat3("normalMatrix", glm::transpose(glm::inverse(glm::mat3(model))));
+            // renderSphere();
         }
 
         // render skybox (render as last to prevent overdraw)

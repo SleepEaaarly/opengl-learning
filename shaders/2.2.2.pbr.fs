@@ -93,13 +93,9 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness)
 void main()
 {		
     // material properties
-    vec3 albedo_color = vec3(0.9, 0.9, 0.9);
-    // vec3 albedo = pow(texture(albedoMap, TexCoords).rgb, vec3(2.2));
-    vec3 albedo = pow(albedo_color, vec3(2.2));
-    // float metallic = texture(metallicMap, TexCoords).r;
-    // float roughness = texture(roughnessMap, TexCoords).r;
-    float metallic = 0.9;
-    float roughness = 0.01;
+    vec3 albedo = pow(texture(albedoMap, TexCoords).rgb, vec3(2.2));
+    float metallic = texture(metallicMap, TexCoords).r;
+    float roughness = texture(roughnessMap, TexCoords).r;
     float ao = texture(aoMap, TexCoords).r;
        
     // input lighting data
@@ -167,8 +163,10 @@ void main()
     vec3 specular = prefilteredColor * (F * brdf.x + brdf.y);
 
     vec3 ambient = (kD * diffuse + specular) * ao;
-    
+    // vec3 ambient = kD * diffuse;
+
     vec3 color = ambient + Lo;
+    // vec3 color = kD * diffuse;
 
     // HDR tonemapping
     color = color / (color + vec3(1.0));
